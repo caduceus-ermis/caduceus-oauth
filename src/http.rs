@@ -3,18 +3,10 @@ use actix_web::{
     web::{self, Json},
 };
 use apple_signin::AppleJwtClient;
-use chrono::{Duration, Utc};
+use chrono:: Utc;
 
-use jsonwebtoken::{EncodingKey, Header};
-use openidconnect::{
-    core::{
-        CoreGenderClaim, CoreHmacKey, CoreIdToken, CoreIdTokenClaims, CoreJsonWebKeyType,
-        CoreJweContentEncryptionAlgorithm, CoreJwsSigningAlgorithm, CoreRsaPrivateSigningKey,
-    },
-    url::Url,
-    Audience, EmptyAdditionalClaims, IdToken, IssuerUrl, JsonWebTokenError, Nonce, StandardClaims,
-    SubjectIdentifier,
-};
+use jsonwebtoken::EncodingKey;
+
 
 use sqlx::query_as;
 
@@ -68,6 +60,7 @@ pub struct GoogleUser {
     pub locale: String,
 }
 
+
 /// Simple HTTP server health check.
 #[get("/api/health")]
 async fn health_check() -> &'static str {
@@ -110,16 +103,30 @@ pub async fn web3auth_start(
 pub struct ErmisTokenClaims {
     pub user_id: String,
     pub exp: i64,
+    pub name: Option<String>,
+    pub image: Option<String>,
 }
 
-fn ermis_token(user_id: String, token_expiration: u32, client_secret: String) -> String {
+impl ErmisTokenClaims {
+    pub fn new(user_id: String, exp: i64, name: Option<String>, image: Option<String>) -> Self {
+        Self {
+            user_id,
+            exp,
+            name,
+            image,
+        }
+    }
+}
+
+fn ermis_token(user_id: String, token_expiration: u32, client_secret: String, name: Option<String>, image: Option<String>) -> String {
     let issue_time = Utc::now().timestamp_millis();
     let expiration = issue_time + token_expiration as i64;
+    // let claims = ErmisTokenClaims {
+    //     user_id,
+    //     exp: expiration,
+    // };
 
-    let claims = ErmisTokenClaims {
-        user_id,
-        exp: expiration,
-    };
+    let claims = ErmisTokenClaims::new(user_id, expiration, name, image);
     let token = jsonwebtoken::encode(
         &jsonwebtoken::Header::default(),
         &claims,
@@ -129,61 +136,6 @@ fn ermis_token(user_id: String, token_expiration: u32, client_secret: String) ->
     token
 }
 
-/// Creates OIDC id token for given wallet
-fn issue_id_token<T>(
-    wallet_address: &str,
-    base_url: &Url,
-    secret: T,
-    rsa_key: Option<CoreRsaPrivateSigningKey>,
-    nonce: &str,
-    client_id: &str,
-    token_expiration: u32,
-) -> Result<
-    IdToken<
-        EmptyAdditionalClaims,
-        CoreGenderClaim,
-        CoreJweContentEncryptionAlgorithm,
-        CoreJwsSigningAlgorithm,
-        CoreJsonWebKeyType,
-    >,
-    JsonWebTokenError,
->
-where
-    T: Into<Vec<u8>>,
-{
-    let wallet_address = wallet_address.to_lowercase();
-    let issue_time = Utc::now();
-    let expiration = issue_time + Duration::seconds(token_expiration.into());
-    let claims = StandardClaims::new(SubjectIdentifier::new(wallet_address));
-    let id_token_claims = CoreIdTokenClaims::new(
-        IssuerUrl::from_url(base_url.clone()),
-        vec![Audience::new(client_id.to_string())],
-        expiration,
-        issue_time,
-        claims,
-        openidconnect::EmptyAdditionalClaims {},
-    )
-    .set_nonce(Some(Nonce::new(nonce.to_string())));
-
-    match rsa_key {
-        // RSA flow
-        Some(key) => CoreIdToken::new(
-            id_token_claims,
-            &key,
-            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
-            None,
-            None,
-        ),
-        // HMAC flow
-        None => CoreIdToken::new(
-            id_token_claims,
-            &CoreHmacKey::new(secret),
-            CoreJwsSigningAlgorithm::HmacSha256,
-            None,
-            None,
-        ),
-    }
-}
 
 /// Finish Web3 authentication. Verifies signature and returns OIDC id_token if correct.
 #[post("/auth")]
@@ -201,6 +153,7 @@ pub async fn web3auth_end(
                 address,
                 app_state.config.token_timeout,
                 app_state.config.client_secret.clone(),
+                None, None
             );
             wallet.challenge_signature = Some(signature.signature.clone());
             wallet.save(&app_state.pool).await?;
@@ -245,21 +198,12 @@ pub async fn refresh(
             app_state.config.refresh_token_timeout,
         );
         if let Some(wallet) = Wallet::find_by_id(&app_state.pool, refresh_token.wallet_id).await? {
-            // Doesn't return nonce while refreshing token
-            // https://openid.net/specs/openid-connect-core-1_0.html#RefreshTokenResponse
-            // let id_token = issue_id_token(
-            //     &wallet.address,
-            //     &app_state.config.issuer_url,
-            //     app_state.config.client_secret.clone(),
-            //     None,
-            //     "",
-            //     &app_state.config.client_id,
-            //     app_state.config.token_timeout,
-            // )?;
+           
             let id_token = ermis_token(
                 wallet.address,
                 app_state.config.token_timeout,
                 app_state.config.client_secret.clone(),
+                None, None
             );
             new_refresh_token.save(&app_state.pool).await?;
             log::info!(
@@ -284,39 +228,42 @@ pub async fn refresh(
     }
 }
 
-// get token from app, verify it with apple, get email, check if email is in db, if not create new user
-#[post("/auth/apple")]
-async fn apple_auth(
-    app_state: web::Data<AppState>,
-    request_data: web::Json<TokenForm>,
-) -> anyhow::Result<Json<TokenForm>, actix_web::Error> {
-    let token = &request_data.token;
+// verify apple token
+// #[post("/auth/apple")]
+// async fn apple_auth(
+//     app_state: web::Data<AppState>,
+//     request_data: web::Json<TokenForm>,
+// ) -> anyhow::Result<Json<TokenForm>, actix_web::Error> {
+//     let token = &request_data.token;
 
-    let mut client = AppleJwtClient::new(&["com.tuyenvx.testloging"]);
+//     let mut client = AppleJwtClient::new(&["com.tuyenvx.testloging"]);
 
-    let payload = client.decode(token).await;
-    match payload {
-        Ok(payload) => {
-            // let header = Header::new(Algorithm::RS256);
-            let token = jsonwebtoken::encode(
-                &Header::default(),
-                &payload,
-                &EncodingKey::from_secret(&app_state.config.client_secret.as_ref()),
-            )
-            .unwrap();
-            let token = TokenForm { token };
+//     let payload = client.decode(token).await;
+//     match payload {
+//         Ok(payload) => {
+//             let token = jsonwebtoken::encode(
+//                 &Header::default(),
+//                 &payload,
+//                 &EncodingKey::from_secret(&app_state.config.client_secret.as_ref()),
+//             )
+//             .unwrap();
+//             let token = ermis_token(payload.user_id, app_state.config.token_timeout,
+//                 app_state.config.client_secret.clone(), None, None);
+//             let token = TokenForm { token };
 
-            return Ok(Json(token));
-        }
-        Err(e) => return Err(actix_web::error::ErrorBadRequest(e.to_string())),
-    }
-}
+//             return Ok(Json(token));
+//         }
+//         Err(e) => return Err(actix_web::error::ErrorBadRequest(e.to_string())),
+//     }
+// }
 
+// verify google token
 #[post("/auth/google")]
 pub async fn google_login(
     app_state: web::Data<AppState>,
     request_data: web::Json<TokenForm>,
-) -> anyhow::Result<Json<TokenForm>, actix_web::Error> {
+// ) -> anyhow::Result<Json<TokenForm>, actix_web::Error> {
+) -> Result<Json<JwtToken>, ApiError> {
     let token = &request_data.token;
 
     let mut client = GoogleJwtClient::new(&[
@@ -326,38 +273,35 @@ pub async fn google_login(
     let payload = client.decode(token).await;
     match payload {
         Ok(payload) => {
-            // let header = Header::new(Algorithm::RS256);
-            let token = jsonwebtoken::encode(
-                &Header::default(),
-                &payload,
-                &EncodingKey::from_secret(&app_state.config.client_secret.as_ref()),
-            )
-            .unwrap();
-            let token = TokenForm { token };
+            
+            let mut user =
+        if let Some(user) = Wallet::find_by_address(&app_state.pool, &payload.sub).await? {
+            user
+        } else {
+            let mut user = Wallet::new(payload.sub.clone());
+            user.save(&app_state.pool).await?;
+            user
+        };
+    user.save(&app_state.pool).await?;
+            let id_token = ermis_token(payload.sub, app_state.config.token_timeout,
+                app_state.config.client_secret.clone(), payload.name, payload.picture);
+                if let Some(user_id) = user.id {
+                    let mut refresh_token =
+                        RefreshToken::new(user_id, app_state.config.refresh_token_timeout);
+                    refresh_token.save(&app_state.pool).await?;
+                   return  Ok(Json(JwtToken {
+                        token: id_token.to_string(),
+                        refresh_token: refresh_token.token,
+                    }))
+                } else {
+                   return  Err(ApiError::WalletNotFound)
+                }
 
-            return Ok(Json(token));
         }
-        Err(e) => return Err(actix_web::error::ErrorBadRequest(e.to_string())),
+        Err(_) => {println!("error when decode token!"); return Err(ApiError::TokenNotFound)},
     }
 }
 
-// pub async fn check_wallet_transactions(address: String) -> web3::Result<()> {
-//     let transport = web3::transports::Http::new("http://localhost:8545")?;
-//     let web3 = web3::Web3::new(transport);
-
-//     println!("Calling accounts.");
-//     let mut accounts = web3.eth().accounts().await?;
-//     println!("Accounts: {:?}", accounts);
-//     accounts.push(address.parse().unwrap());
-
-//     println!("Calling balance.");
-//     for account in accounts {
-//         let balance = web3.eth().balance(account, None).await?;
-//         println!("Balance of {:?}: {}", account, balance);
-//     }
-
-//     Ok(())
-// }
 
 /// Configure Actix Web server.
 pub fn config_service(config: &mut web::ServiceConfig) {

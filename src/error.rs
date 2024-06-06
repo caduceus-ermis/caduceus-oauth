@@ -19,6 +19,8 @@ pub enum ApiError {
     SigningError(#[from] JsonWebTokenError),
     #[error("reqwest error")]
     Reqwest(#[from] reqwest::Error),
+    #[error("token error")]
+    TokenError(#[from] GoogleJwtError),
 }
 
 impl ApiError {
@@ -30,6 +32,7 @@ impl ApiError {
             Self::SigningError(_) => "SigningError",
             Self::TokenNotFound => "TokenNotFound",
             Self::Reqwest(_) => "ReqwestError",
+            Self::TokenError(_) => "TokenError",
         }
     }
 
@@ -41,6 +44,7 @@ impl ApiError {
             Self::SigningError(_) => String::from("Signing error"),
             Self::TokenNotFound => String::from("Refresh token not found"),
             Self::Reqwest(_) => String::from("Reqwest error"),
+            Self::TokenError(_) => String::from("Token error"),
         }
     }
 }
@@ -74,7 +78,9 @@ impl ResponseError for ApiError {
             ApiError::WalletNotFound
             | ApiError::SignatureIncorrect
             | ApiError::SigningError(_)
+            | ApiError::TokenError(_) => StatusCode::BAD_REQUEST,
             | ApiError::TokenNotFound => StatusCode::UNAUTHORIZED,
+            
             ApiError::Reqwest(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

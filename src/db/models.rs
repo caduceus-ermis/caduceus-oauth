@@ -6,7 +6,7 @@ use secp256k1::{
     Message, Secp256k1,
 };
 use sqlx::{query, query_as};
-use web3::signing::{keccak256, recover};
+use web3::signing::keccak256;
 
 use crate::{
     // crypto::keccak256,
@@ -41,33 +41,6 @@ impl Wallet {
         }
     }
 
-    // pub fn verify_address(&self, message: &str, signature: &str) -> Result<bool, Web3Error> {
-    //     let signature_array = hex_decode(signature).map_err(|_| Web3Error::Decode)?;
-    //     let typed_data: TypedData = serde_json::from_str(message).map_err(|_| Web3Error::Decode)?;
-    //     println!("Typed data: {:?}", typed_data);
-    //     let hash_msg = typed_data.encode_eip712().map_err(|_| Web3Error::Decode)?;
-    //     if signature_array.len() != 65 {
-    //         return Err(Web3Error::InvalidMessage);
-    //     }
-
-    //     let recovery_id = match signature_array[64] {
-    //         0 | 27 => 0,
-    //         1 | 28 => 1,
-    //         v if v >= 35 => i32::from((v - 1) & 1),
-    //         _ => return Err(Web3Error::InvalidRecoveryId),
-    //     };
-    //     let pubkey = recover(&hash_msg, &signature_array[..64], recovery_id);
-
-    //     match pubkey {
-    //         Ok(pubkey) => {
-    //             let pubkey_string = format!("{:02X?}", pubkey);
-    //             println!("Pubkey: {}, address, {}", pubkey_string, self.address);
-    //             return Ok(pubkey_string == self.address);
-    //             // return Ok(true);
-    //         }
-    //         Err(_) => Ok(false),
-    //     }
-    // }
 
     pub fn eth_message(message: String) -> [u8; 32] {
         keccak256(
@@ -86,11 +59,8 @@ impl Wallet {
         let address_array = hex_decode(&self.address).map_err(|_| Web3Error::Decode)?;
         let signature_array = hex_decode(signature).map_err(|_| Web3Error::Decode)?;
         let typed_data: TypedData = serde_json::from_str(message).map_err(|_| Web3Error::Decode)?;
-        println!("Typed data: {:?}", typed_data);
         let hash_msg = typed_data.encode_eip712().map_err(|_| Web3Error::Decode)?;
-        println!("Hash message: {}", to_lower_hex(&hash_msg));
         let message = Message::from_slice(&hash_msg).map_err(|_| Web3Error::InvalidMessage)?;
-        println!("signature length: {}", signature_array.len());
         if signature_array.len() != 65 {
             return Err(Web3Error::InvalidMessage);
         }
@@ -100,23 +70,15 @@ impl Wallet {
             v if v >= 35 => i32::from((v - 1) & 1),
             _ => return Err(Web3Error::InvalidRecoveryId),
         };
-        println!("Recovery id: {}", id);
         let recovery_id = RecoveryId::from_i32(id).map_err(|_| Web3Error::ParseSignature)?;
         let recoverable_signature =
             RecoverableSignature::from_compact(&signature_array[0..64], recovery_id)
                 .map_err(|_| Web3Error::ParseSignature)?;
-        println!("Recoverable signature: {:?}", recoverable_signature);
         let public_key = Secp256k1::new()
             .recover_ecdsa(&message, &recoverable_signature)
             .map_err(|_| Web3Error::Recovery)?;
-        println!(
-            "Public key: {}",
-            to_lower_hex(&public_key.serialize_uncompressed())
-        );
         let public_key = public_key.serialize_uncompressed();
         let hash = keccak256(&public_key[1..]);
-        println!("Hash: {}", to_lower_hex(&hash[12..]));
-        println!("address array: {}", to_lower_hex(&address_array));
 
         Ok(hash[12..] == address_array)
     }
@@ -202,6 +164,53 @@ pub fn hash_message<S: AsRef<[u8]>>(message: S) -> [u8; 32] {
     eth_message.extend_from_slice(message);
     keccak256(&eth_message)
 }
+
+
+// #[derive(Model, Debug)]
+// pub struct SocialUser {
+//     pub(crate) id: Option<i64>,
+//     pub sub: String,
+//     pub picture: String
+// }
+
+// impl SocialUser {
+//     #[must_use]
+//     pub fn new(
+//         sub: String,
+//         email: String,
+//         name: String,
+//         picture: String,
+//         social_id: String,
+//         social_type: String,
+//     ) -> Self {
+//         Self {
+//             id: None,
+//             sub,
+//             email,
+//             name,
+//             picture,
+//             social_id,
+//             social_type,
+//         }
+//     }
+
+//     pub async fn find_by_social_id(
+//         pool: &DbPool,
+//         social_id: &str,
+//         social_type: &str,
+//     ) -> Result<Option<Self>, sqlx::Error> {
+//         query_as!(
+//             Self,
+//             "SELECT id "id?", sub, email, name, picture, social_id, social_type \
+//             FROM socialuser WHERE social_id = $1 AND social_type = $2",
+//             social_id,
+//             social_type
+//         )
+//         .fetch_optional(pool)
+//         .await
+//     }
+
+// }
 
 #[derive(Model, Debug)]
 pub struct RefreshToken {
@@ -298,28 +307,3 @@ impl RefreshToken {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_verify_address() {
-        for (address, signature) in [
-            ("0x6cD15DA14A4Ef26047f1D7858D7A82b59DDCa102",
-            "0xfb812c61b3d5f3ea729a049b4f14c28c07938367c91062c959150e1a3273f07772f162c5abf8312be39c3a6640c47e02866bcd19b5545bc5650d5870547a1a8f1c"),
-            ("0x8AEF669452465635355923E4Dc80990aEAEE3b8d",
-            "0xefa7641e06c0d35e9386a3d97d50c5a2fffc7c5838ea42647093417b62bd1dc830ce8ecea3f9173190ee6c215a8a423fd1110caba06b6dc474e0792f802dfdc31b"),
-            ("0xE8e659AD9E99afd41f97015Cb2E2a96dD7456fA0",
-            "0x47d3eddfb2ed3ad1776c704fbe90737286ede2931c9e561abe6ce33606f411a00eafc25ec540e5db7ea82364e7df1e4722a916a828f02746a28773ae0e7bf3f31b"),
-        ] {
-            let message =  Wallet::format_challenge(address, CHALLENGE_TEMPLATE);
-            let wallet = Wallet::new(address.into());
-            let result = wallet.verify_address(
-                &message,
-                signature,
-            )
-            .unwrap();
-            assert!(result);
-        }
-    }
-}
