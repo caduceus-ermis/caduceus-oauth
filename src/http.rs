@@ -2,7 +2,7 @@ use actix_web::{
     get, post,
     web::{self, Json},
 };
-use apple_signin::AppleJwtClient;
+// use apple_signin::AppleJwtClient;
 use chrono:: Utc;
 
 use jsonwebtoken::EncodingKey;
@@ -177,6 +177,82 @@ pub async fn web3auth_end(
     }
 }
 
+
+
+// verify apple token
+// #[post("/auth/apple")]
+// async fn apple_auth(
+//     app_state: web::Data<AppState>,
+//     request_data: web::Json<TokenForm>,
+// ) -> anyhow::Result<Json<TokenForm>, actix_web::Error> {
+//     let token = &request_data.token;
+
+//     let mut client = AppleJwtClient::new(&["com.tuyenvx.testloging"]);
+
+//     let payload = client.decode(token).await;
+//     match payload {
+//         Ok(payload) => {
+//             let token = jsonwebtoken::encode(
+//                 &Header::default(),
+//                 &payload,
+//                 &EncodingKey::from_secret(&app_state.config.client_secret.as_ref()),
+//             )
+//             .unwrap();
+//             let token = ermis_token(payload.user_id, app_state.config.token_timeout,
+//                 app_state.config.client_secret.clone(), None, None);
+//             let token = TokenForm { token };
+
+//             return Ok(Json(token));
+//         }
+//         Err(e) => return Err(actix_web::error::ErrorBadRequest(e.to_string())),
+//     }
+// }
+
+// verify google token
+#[post("/auth/google")]
+pub async fn google_login(
+    app_state: web::Data<AppState>,
+    request_data: web::Json<TokenForm>,
+// ) -> anyhow::Result<Json<TokenForm>, actix_web::Error> {
+) -> Result<Json<JwtToken>, ApiError> {
+    let token = &request_data.token;
+
+    let mut client = GoogleJwtClient::new(&[
+        "627177543690-6auhc93esd9crfb741ejf7guc5gg0787.apps.googleusercontent.com",
+    ]);
+
+    let payload = client.decode(token).await;
+    match payload {
+        Ok(payload) => {
+            
+            let mut user =
+        if let Some(user) = Wallet::find_by_address(&app_state.pool, &payload.sub).await? {
+            user
+        } else {
+            let mut user = Wallet::new(payload.sub.clone());
+            user.save(&app_state.pool).await?;
+            user
+        };
+    user.save(&app_state.pool).await?;
+            let id_token = ermis_token(payload.sub, app_state.config.token_timeout,
+                app_state.config.client_secret.clone(), payload.name, payload.picture);
+                if let Some(user_id) = user.id {
+                    let mut refresh_token =
+                        RefreshToken::new(user_id, app_state.config.refresh_token_timeout);
+                    refresh_token.save(&app_state.pool).await?;
+                   return  Ok(Json(JwtToken {
+                        token: id_token.to_string(),
+                        refresh_token: refresh_token.token,
+                    }))
+                } else {
+                   return  Err(ApiError::WalletNotFound)
+                }
+
+        }
+        Err(_) => {println!("error when decode token!"); return Err(ApiError::TokenNotFound)},
+    }
+}
+
 /// Issue new id token and refresh token set old as used
 #[post("/refresh")]
 pub async fn refresh(
@@ -228,80 +304,6 @@ pub async fn refresh(
     }
 }
 
-// verify apple token
-// #[post("/auth/apple")]
-// async fn apple_auth(
-//     app_state: web::Data<AppState>,
-//     request_data: web::Json<TokenForm>,
-// ) -> anyhow::Result<Json<TokenForm>, actix_web::Error> {
-//     let token = &request_data.token;
-
-//     let mut client = AppleJwtClient::new(&["com.tuyenvx.testloging"]);
-
-//     let payload = client.decode(token).await;
-//     match payload {
-//         Ok(payload) => {
-//             let token = jsonwebtoken::encode(
-//                 &Header::default(),
-//                 &payload,
-//                 &EncodingKey::from_secret(&app_state.config.client_secret.as_ref()),
-//             )
-//             .unwrap();
-//             let token = ermis_token(payload.user_id, app_state.config.token_timeout,
-//                 app_state.config.client_secret.clone(), None, None);
-//             let token = TokenForm { token };
-
-//             return Ok(Json(token));
-//         }
-//         Err(e) => return Err(actix_web::error::ErrorBadRequest(e.to_string())),
-//     }
-// }
-
-// verify google token
-#[post("/auth/google")]
-pub async fn google_login(
-    app_state: web::Data<AppState>,
-    request_data: web::Json<TokenForm>,
-// ) -> anyhow::Result<Json<TokenForm>, actix_web::Error> {
-) -> Result<Json<JwtToken>, ApiError> {
-    let token = &request_data.token;
-
-    let mut client = GoogleJwtClient::new(&[
-        "189085125783-c038123hbeum42s6tsvd222kqmoite13.apps.googleusercontent.com",
-    ]);
-
-    let payload = client.decode(token).await;
-    match payload {
-        Ok(payload) => {
-            
-            let mut user =
-        if let Some(user) = Wallet::find_by_address(&app_state.pool, &payload.sub).await? {
-            user
-        } else {
-            let mut user = Wallet::new(payload.sub.clone());
-            user.save(&app_state.pool).await?;
-            user
-        };
-    user.save(&app_state.pool).await?;
-            let id_token = ermis_token(payload.sub, app_state.config.token_timeout,
-                app_state.config.client_secret.clone(), payload.name, payload.picture);
-                if let Some(user_id) = user.id {
-                    let mut refresh_token =
-                        RefreshToken::new(user_id, app_state.config.refresh_token_timeout);
-                    refresh_token.save(&app_state.pool).await?;
-                   return  Ok(Json(JwtToken {
-                        token: id_token.to_string(),
-                        refresh_token: refresh_token.token,
-                    }))
-                } else {
-                   return  Err(ApiError::WalletNotFound)
-                }
-
-        }
-        Err(_) => {println!("error when decode token!"); return Err(ApiError::TokenNotFound)},
-    }
-}
-
 
 /// Configure Actix Web server.
 pub fn config_service(config: &mut web::ServiceConfig) {
@@ -310,7 +312,7 @@ pub fn config_service(config: &mut web::ServiceConfig) {
         .service(list_wallets)
         .service(web3auth_start)
         .service(web3auth_end)
-        .service(apple_auth)
+        // .service(apple_auth)
         .service(google_login)
         .service(refresh);
 }

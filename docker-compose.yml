@@ -7,9 +7,9 @@ services:
       context: .
     restart: always
     ports:
-      - "5003:8080"
+      - "5005:8080"
     environment:
-      EM_DB_HOST: db-dev
+      EM_DB_HOST: caduceus
       EM_DB_PORT: 5432
       EM_DB_USER: ermis
       EM_DB_PASSWORD: ermis
@@ -18,8 +18,8 @@ services:
       EM_CLIENT_ORIGIN_URL: http://localhost:8000
       EM_CLIENT_SECRET: 9f84c0001c10db502884ca678a6001a45c16662e96ca549df08993465cb50b5c
 
-  db-dev:
-    container_name: db-dev
+  caduceus:
+    container_name: caduceus
     image: postgres:15.1-alpine3.17
     restart: always
     environment:
